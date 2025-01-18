@@ -26,8 +26,8 @@ jobs:
           header=$(grep -m 1 . changeNew.md | sed 's/^# //')
           echo "Changelog header: $header"
 
-          if [[ "$header" != "$VERSION" ]]; then
-            echo "Changelog header $header does not match the tag $VERSION"
+          if [[ "$header" != "${{ github.ref_name }}" ]; then
+            echo "Changelog header $header does not match the tag ${{ github.ref_name }}"
             exit 1
           fi
 
