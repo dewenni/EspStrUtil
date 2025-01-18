@@ -3,12 +3,133 @@
 #include <Arduino.h>
 #include <cctype>
 #include <cstring>
+#include <mbedtls/aes.h>
+#include <mbedtls/base64.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 class EspStrUtil {
 
+private:
+  static constexpr size_t AES_BLOCK_SIZE = 16;
+
+  // add PKCS7-Padding
+  static size_t addPadding(unsigned char *buffer, size_t dataLength,
+                           size_t bufferSize) {
+    size_t paddingLength = AES_BLOCK_SIZE - (dataLength % AES_BLOCK_SIZE);
+    if (dataLength + paddingLength > bufferSize) {
+      return 0; // error buffer to small
+    }
+    memset(buffer + dataLength, paddingLength, paddingLength);
+    return dataLength + paddingLength;
+  }
+
+  // remove PKCS7-Padding
+  static size_t removePadding(unsigned char *buffer, size_t dataLength) {
+    if (dataLength == 0 || dataLength % AES_BLOCK_SIZE != 0) {
+      return 0; // error: invalid length
+    }
+    size_t paddingLength = buffer[dataLength - 1];
+    if (paddingLength > AES_BLOCK_SIZE || paddingLength > dataLength) {
+      return 0; // error: invalid padding
+    }
+    return dataLength - paddingLength;
+  }
+
 public:
+  /**
+   * *******************************************************************
+   * @brief   Encrypts a password and encodes it in Base64 format
+   * @param   input         Plaintext password to be encrypted
+   * @param   key           16-byte AES key used for encryption
+   * @param   output        Buffer to store the Base64-encoded, encrypted
+   * password
+   * @param   maxOutputSize Maximum size of the output buffer
+   * @return  true if encryption and Base64 encoding is successful
+   * *******************************************************************/
+  static bool encryptPassword(const char *input, const unsigned char *key,
+                              char *output, size_t maxOutputSize) {
+    if (!input || !key || !output || maxOutputSize == 0)
+      return false;
+
+    unsigned char paddedInput[128 + AES_BLOCK_SIZE] = {0};
+    unsigned char encrypted[128 + AES_BLOCK_SIZE] = {0};
+
+    size_t inputLength = strlen(input);
+    if (inputLength > 128)
+      return false; // Password to long
+
+    memcpy(paddedInput, input, inputLength);
+    size_t paddedLength =
+        addPadding(paddedInput, inputLength, sizeof(paddedInput));
+    if (paddedLength == 0)
+      return false; // Padding-error
+
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, key, 128);
+
+    for (size_t i = 0; i < paddedLength; i += AES_BLOCK_SIZE) {
+      mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, paddedInput + i,
+                            encrypted + i);
+    }
+    mbedtls_aes_free(&aes);
+
+    size_t base64Length = 0;
+    if (mbedtls_base64_encode((unsigned char *)output, maxOutputSize,
+                              &base64Length, encrypted, paddedLength) != 0) {
+      return false;
+    }
+
+    output[base64Length] = '\0';
+    return true;
+  }
+
+  /**
+   * *******************************************************************
+   * @brief   Decrypts a Base64-encoded, encrypted password
+   * @param   input         Base64-encoded encrypted password
+   * @param   key           16-byte AES key used for decryption
+   * @param   output        Buffer to store the decrypted password
+   * @param   maxOutputSize Maximum size of the output buffer
+   * @return  true if decryption and padding removal were successful
+   * *******************************************************************/
+  static bool decryptPassword(const char *input, const unsigned char *key,
+                              char *output, size_t maxOutputSize) {
+    if (!input || !key || !output || maxOutputSize == 0)
+      return false;
+
+    unsigned char encrypted[128 + AES_BLOCK_SIZE] = {0};
+    unsigned char decrypted[128 + AES_BLOCK_SIZE] = {0};
+
+    size_t encryptedLength = sizeof(encrypted);
+    if (mbedtls_base64_decode(encrypted, encryptedLength, &encryptedLength,
+                              (const unsigned char *)input,
+                              strlen(input)) != 0) {
+      return false; // error Base64-decoding
+    }
+
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_dec(&aes, key, 128);
+
+    for (size_t i = 0; i < encryptedLength; i += AES_BLOCK_SIZE) {
+      mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT, encrypted + i,
+                            decrypted + i);
+    }
+    mbedtls_aes_free(&aes);
+
+    size_t actualLength = removePadding(decrypted, encryptedLength);
+    if (actualLength == 0 || actualLength >= maxOutputSize) {
+      return false; // error
+    }
+
+    memcpy(output, decrypted, actualLength);
+    output[actualLength] = '\0';
+    return true;
+  }
+
   /**
    * *******************************************************************
    * @brief   create String from integer
@@ -107,12 +228,14 @@ public:
 
   /**
    * *******************************************************************
-   * @brief   Combines all float and double conversions with custom decimal precision
+   * @brief   Combines all float and double conversions with custom decimal
+   * precision
    * @param   float or double value
    * @param   decimal precision
    * @return  string representation of the float or double value
    * *******************************************************************/
-  template <typename T> static inline const char *floatToString(T value, int decimals = 1) {
+  template <typename T>
+  static inline const char *floatToString(T value, int decimals = 1) {
     static char ret_str[64];
     char format[8];
     snprintf(format, sizeof(format), "%%.%df", decimals);
@@ -128,7 +251,8 @@ public:
    * @param   dest_size destination size
    * @return  none
    * *******************************************************************/
-  static inline char *strcat_safe(char *dest, const char *src, size_t dest_size) {
+  static inline char *strcat_safe(char *dest, const char *src,
+                                  size_t dest_size) {
     size_t dest_len = strlen(dest);
     size_t src_len = strlen(src);
 
@@ -172,11 +296,12 @@ public:
     --------------------------------------------------------- */
     static char dateTimeInfo[74] = {'\0'}; // Date and time info String
     time_t now;                            // this is the epoch
-    tm dti;                                // the structure tm holds time information in a more convient way
-    time(&now);                            // read the current time
-    localtime_r(&now, &dti);               // update the structure tm with the current time
-    snprintf(dateTimeInfo, sizeof(dateTimeInfo), "%02d.%02d.%02d - %02i:%02i:%02i", dti.tm_mday, (dti.tm_mon + 1), (dti.tm_year + 1900), dti.tm_hour,
-             dti.tm_min, dti.tm_sec);
+    tm dti; // the structure tm holds time information in a more convient way
+    time(&now);              // read the current time
+    localtime_r(&now, &dti); // update the structure tm with the current time
+    snprintf(dateTimeInfo, sizeof(dateTimeInfo),
+             "%02d.%02d.%02d - %02i:%02i:%02i", dti.tm_mday, (dti.tm_mon + 1),
+             (dti.tm_year + 1900), dti.tm_hour, dti.tm_min, dti.tm_sec);
     return dateTimeInfo;
   }
 
@@ -189,10 +314,11 @@ public:
   static inline const char *getDateString() {
     static char dateInfo[74] = {'\0'}; // Date String
     time_t now;                        // this is the epoch
-    tm dti;                            // the structure tm holds time information in a more convient way
-    time(&now);                        // read the current time
-    localtime_r(&now, &dti);           // update the structure tm with the current time
-    snprintf(dateInfo, sizeof(dateInfo), "%02d.%02d.%02d", dti.tm_mday, (dti.tm_mon + 1), (dti.tm_year + 1900));
+    tm dti; // the structure tm holds time information in a more convient way
+    time(&now);              // read the current time
+    localtime_r(&now, &dti); // update the structure tm with the current time
+    snprintf(dateInfo, sizeof(dateInfo), "%02d.%02d.%02d", dti.tm_mday,
+             (dti.tm_mon + 1), (dti.tm_year + 1900));
     return dateInfo;
   }
   /**
@@ -204,10 +330,11 @@ public:
   static inline const char *getDateStringWeb() {
     static char dateInfo[74] = {'\0'}; // Date String
     time_t now;                        // this is the epoch
-    tm dti;                            // the structure tm holds time information in a more convient way
-    time(&now);                        // read the current time
-    localtime_r(&now, &dti);           // update the structure tm with the current time
-    snprintf(dateInfo, sizeof(dateInfo), "%02d-%02d-%02d", (dti.tm_year + 1900), (dti.tm_mon + 1), dti.tm_mday);
+    tm dti; // the structure tm holds time information in a more convient way
+    time(&now);              // read the current time
+    localtime_r(&now, &dti); // update the structure tm with the current time
+    snprintf(dateInfo, sizeof(dateInfo), "%02d-%02d-%02d", (dti.tm_year + 1900),
+             (dti.tm_mon + 1), dti.tm_mday);
     return dateInfo;
   }
 
@@ -220,10 +347,11 @@ public:
   static inline const char *getTimeString() {
     static char timeInfo[74] = {'\0'}; // Date and time info String
     time_t now;                        // this is the epoch
-    tm dti;                            // the structure tm holds time information in a more convient way
-    time(&now);                        // read the current time
-    localtime_r(&now, &dti);           // update the structure tm with the current time
-    snprintf(timeInfo, sizeof(timeInfo), "%02i:%02i:%02i", dti.tm_hour, dti.tm_min, dti.tm_sec);
+    tm dti; // the structure tm holds time information in a more convient way
+    time(&now);              // read the current time
+    localtime_r(&now, &dti); // update the structure tm with the current time
+    snprintf(timeInfo, sizeof(timeInfo), "%02i:%02i:%02i", dti.tm_hour,
+             dti.tm_min, dti.tm_sec);
     return timeInfo;
   }
 
@@ -236,7 +364,8 @@ public:
   static inline const char *getBuildDateTime() {
     static char formatted_date[32] = {0};
     // Monatsnamen für die Umwandlung in Zahlen
-    const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     char month_text[4] = {0};
     int day, year;
     // Extrahiere den Monat, Tag und Jahr aus dem __DATE__ String
@@ -295,7 +424,8 @@ public:
    * @param   output_size
    * @return  none
    * *******************************************************************/
-  static inline void replace_underscores(const char *input, char *output, size_t output_size) {
+  static inline void replace_underscores(const char *input, char *output,
+                                         size_t output_size) {
     if (input == NULL || output == NULL)
       return;
     memset(output, 0, output_size);
@@ -313,7 +443,8 @@ public:
    * @param   output_size
    * @return  none
    * *******************************************************************/
-  static inline void replace_whitespace(const char *input, char *output, size_t output_size) {
+  static inline void replace_whitespace(const char *input, char *output,
+                                        size_t output_size) {
     if (input == NULL || output == NULL)
       return;
     memset(output, 0, output_size);
@@ -331,7 +462,8 @@ public:
    * @param   output_size
    * @return  none
    * *******************************************************************/
-  static inline void to_lowercase(const char *input, char *output, size_t output_size) {
+  static inline void to_lowercase(const char *input, char *output,
+                                  size_t output_size) {
     if (input == NULL || output == NULL)
       return;
     memset(output, 0, output_size);
@@ -370,6 +502,21 @@ public:
       snprintf(dest, size, "%s", src);
     }
   }
+
+  // static inline void readJSONstring(std::string &dest,
+  //                                   const JsonVariantConst &src,
+  //                                   const std::string &defaultValue = "") {
+  //   if (src.isNull()) {
+  //     dest = defaultValue; // Setze Standardwert
+  //   } else {
+  //     dest = src.as<std::string>();
+  //   }
+  // }
+
+  // static inline bool stringToBool(const std::string &str) {
+  //   return (str == "true" ||
+  //           str == "1"); // "true" oder "1" wird als wahr interpretiert
+  // }
 
   /**
    * *******************************************************************

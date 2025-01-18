@@ -1,6 +1,6 @@
 {
     "name": "EspStrUtil",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "A lightweight string utility library for ESP32, providing string manipulation, conversions, and formatting functions.",
     "keywords": ["esp32", "string", "utility", "conversion", "formatting"],
     "repository": {
