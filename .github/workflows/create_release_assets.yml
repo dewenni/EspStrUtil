@@ -42,15 +42,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref_name }}
         run: |
-          # Erstelle die Release-Dateien-Variable
-          files=$(ls ./release/*)
-          
-          # Erstelle das Release und lade die Assets hoch
-          gh release create "$tag" $files \
+          # Erstelle das Release ohne Dateien als Assets
+          gh release create "$tag" \
               --repo="$GITHUB_REPOSITORY" \
               --title="${tag}" \
               -F release_notes.md
-
-      - name: Clean up
-        run: rm release_notes.md
 
