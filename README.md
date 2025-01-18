@@ -15,6 +15,7 @@ EspStrUtil is a utility library for the ESP32, providing various string manipula
   - Format bytes to human-readable strings (e.g., `Bytes`, `kB`, `MB`, `GB`).
   - Hashing functions for strings.
   - Safe string concatenation.
+  - AES encryption and decryption functions
 
 ## Installation
 
