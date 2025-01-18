@@ -21,13 +21,15 @@ jobs:
 
       - name: Check changelog header and prepare release notes
         id: check_changelog
+        env:
+          GITHUB_TAG: ${{ github.ref_name }}
         run: |
           # Lese die erste Zeile der changeNew.md und vergleiche sie mit dem Tag
           header=$(grep -m 1 . changeNew.md | sed 's/^# //')
           echo "Changelog header: $header"
 
-          if [[ "$header" != "${{ github.ref_name }}" ]; then
-            echo "Changelog header $header does not match the tag ${{ github.ref_name }}"
+          if [[ "$header" != "$GITHUB_TAG" ]]; then
+            echo "Changelog header $header does not match the tag $GITHUB_TAG"
             exit 1
           fi
 
